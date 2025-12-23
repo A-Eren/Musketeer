@@ -11,11 +11,10 @@ module ALU_tb;
 
   ALU #(.W(W)) dut (.a(a), .b(b), .op(op), .y(y), .zero(zero));
 
-  task automatic expect(input logic [W-1:0] exp, input string msg);
+  task automatic expect(input logic [W-1:0] exp, input string msg)
     #1;
     if (y !== exp) begin
       ("FAIL: %s | got=%0d (0x%08h) exp=%0d (0x%08h)", msg, y, y, exp, exp);
-      (1);
     end
   endtask
 
