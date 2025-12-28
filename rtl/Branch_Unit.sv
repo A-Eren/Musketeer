@@ -1,31 +1,26 @@
-// rtl/BranchUnit.sv
+// rtl/Branch_Unit.sv
 module BranchUnit (
-  input  logic        is_branch,
-  input  logic [2:0]  funct3,
-
-  input  logic        zero,
-  input  logic        lt_signed,
-  input  logic        lt_unsigned,
-
-  output logic        take_branch
+  input  riscv_pkg::branch_in_t  br_i,
+  output riscv_pkg::branch_out_t br_o
 );
 
   import riscv_pkg::*;
 
   always_comb begin
-    take_branch = 1'b0;
+    br_o.take = 1'b0;
 
-    if (is_branch) begin
-      unique case (funct3)
-        F3_BEQ:  take_branch =  zero;
-        F3_BNE:  take_branch = ~zero;
-        F3_BLT:  take_branch =  lt_signed;
-        F3_BGE:  take_branch = ~lt_signed;   // >= signed
-        F3_BLTU: take_branch =  lt_unsigned;
-        F3_BGEU: take_branch = ~lt_unsigned; // >= unsigned
-        default: take_branch = 1'b0;
-      endcase
-    end
+    unique case (br_i.op)
+      BR_BEQ:  br_o.take =  br_i.alu.zero;
+      BR_BNE:  br_o.take = ~br_i.alu.zero;
+
+      BR_BLT:  br_o.take =  br_i.alu.lt_signed;
+      BR_BGE:  br_o.take = ~br_i.alu.lt_signed;   // >= signed
+
+      BR_BLTU: br_o.take =  br_i.alu.lt_unsigned;
+      BR_BGEU: br_o.take = ~br_i.alu.lt_unsigned; // >= unsigned
+
+      default: br_o.take = 1'b0;
+    endcase
   end
 
 endmodule

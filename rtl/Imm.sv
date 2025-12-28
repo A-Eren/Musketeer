@@ -1,56 +1,46 @@
-// rtl/ImmGen.sv
+// rtl/Imm.sv  (or rtl/ImmGen.sv)
 module ImmGen (
-  input  logic [31:0] instr,
-
-  output logic [31:0] imm,    // auto-selected by opcode (convenience)
-
-  output logic [31:0] imm_i,  // I-type
-  output logic [31:0] imm_s,  // S-type
-  output logic [31:0] imm_b,  // B-type
-  output logic [31:0] imm_u,  // U-type
-  output logic [31:0] imm_j   // J-type
+  input  riscv_pkg::imm_in_t  imm_i,
+  output riscv_pkg::imm_out_t imm_o
 );
 
   import riscv_pkg::*;
 
-  logic [6:0] opcode;
+  // Sign-extend a 32-bit value to XLEN
+  function automatic logic [XLEN-1:0] sext32(input logic [31:0] x);
+    sext32 = {{(XLEN-32){x[31]}}, x};
+  endfunction
+
+  logic [31:0] imm_i32, imm_s32, imm_b32, imm_u32, imm_j32;
 
   always_comb begin
-    opcode = instr[6:0];
+    // raw 32-bit immediates (RV32I formats)
+    imm_i32 = {{20{imm_i.instr[31]}}, imm_i.instr[31:20]};
+    imm_s32 = {{20{imm_i.instr[31]}}, imm_i.instr[31:25], imm_i.instr[11:7]};
+    imm_b32 = {{19{imm_i.instr[31]}}, imm_i.instr[31], imm_i.instr[7],
+               imm_i.instr[30:25], imm_i.instr[11:8], 1'b0};
+    imm_u32 = {imm_i.instr[31:12], 12'b0};
+    imm_j32 = {{11{imm_i.instr[31]}}, imm_i.instr[31], imm_i.instr[19:12],
+               imm_i.instr[20], imm_i.instr[30:21], 1'b0};
 
-    // I-type: imm[11:0] = instr[31:20]
-    imm_i = {{20{instr[31]}}, instr[31:20]};
+    // export sign-extended versions
+    imm_o.imm_i = sext32(imm_i32);
+    imm_o.imm_s = sext32(imm_s32);
+    imm_o.imm_b = sext32(imm_b32);
 
-    // S-type: imm[11:0] = instr[31:25] | instr[11:7]
-    imm_s = {{20{instr[31]}}, instr[31:25], instr[11:7]};
+    // U-type: for RV64 this is typically sign-extended from bit31 after placement
+    imm_o.imm_u = {{(XLEN-32){imm_u32[31]}}, imm_u32};
 
-    // B-type: imm[12|10:5|4:1|11|0] = instr[31|30:25|11:8|7|0]
-    // LSB is always 0 (branch targets are 2-byte aligned)
-    imm_b = {{19{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+    imm_o.imm_j = sext32(imm_j32);
 
-    // U-type: imm[31:12] = instr[31:12], low 12 bits are 0
-    imm_u = {instr[31:12], 12'b0};
-
-    // J-type: imm[20|10:1|11|19:12|0] = instr[31|30:21|20|19:12|0]
-    // LSB is always 0
-    imm_j = {{11{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
-
-    // Convenient "selected" immediate by opcode
-    unique case (opcode)
-      OPCODE_LOAD,
-      OPCODE_OP_IMM,
-      OPCODE_JALR:   imm = imm_i;
-
-      OPCODE_STORE:  imm = imm_s;
-
-      OPCODE_BRANCH: imm = imm_b;
-
-      OPCODE_LUI,
-      OPCODE_AUIPC:  imm = imm_u;
-
-      OPCODE_JAL:    imm = imm_j;
-
-      default:       imm = imm_i; // safe default
+    // selected immediate (selection inside ImmGen)
+    unique case (imm_i.imm_sel)
+      IMM_I: imm_o.imm = imm_o.imm_i;
+      IMM_S: imm_o.imm = imm_o.imm_s;
+      IMM_B: imm_o.imm = imm_o.imm_b;
+      IMM_U: imm_o.imm = imm_o.imm_u;
+      IMM_J: imm_o.imm = imm_o.imm_j;
+      default: imm_o.imm = imm_o.imm_i;
     endcase
   end
 

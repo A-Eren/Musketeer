@@ -1,49 +1,35 @@
 // rtl/RegisterFile.sv
-module RegisterFile #(
-  parameter int XLEN = 32
-) (
-  input  logic         clk_i,
-  input  logic         rst_ni,
-  input  logic  [4:0]   raddr1,
-  input  logic  [4:0]   raddr2,
-  output logic [XLEN-1:0] rdata1,
-  output logic [XLEN-1:0] rdata2,
+module RegisterFile (
+  input  logic            clk,
+  input  logic            rst_n,
 
-  input  logic         we,
-  input  logic  [4:0]  waddr,
-  input  logic [XLEN-1:0] wdata
+  input  riscv_pkg::rf_in_t  rf_i,
+  output riscv_pkg::rf_out_t rf_o
 );
 
-  logic [XLEN-1:0] regs [31:0];
+  import riscv_pkg::*;
 
-  // sync write, x0 is hardwired to 0 by ignoring writes to address 0
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if( !rst_ni ) begin
+  logic [XLEN-1:0] regs [32];
+
+  // Synchronous write, x0 hardwired to zero
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
       integer i;
-      for (i = 0; i < 32; i=i+1) begin
+      for (i = 0; i < 32; i++) begin
         regs[i] <= '0;
       end
+    end else begin
+      if (rf_i.we && (rf_i.waddr != 5'd0)) begin
+        regs[rf_i.waddr] <= rf_i.wdata;
+      end
+      regs[5'd0] <= '0;
     end
-    else
-    if (we && (waddr != 5'd0)) begin
-      regs[waddr] <= wdata;
-    end
-    regs[5'd0] <= '0; // keep x0 clean in simulation/synthesis
   end
 
-  // async reads + simple forwarding
+  // Asynchronous reads (NON-forwarding: no bypass / no write-first)
   always_comb begin
-    logic [XLEN-1:0] raw1, raw2;
-
-    raw1 = (raddr1 == 5'd0) ? '0 : regs[raddr1];
-    raw2 = (raddr2 == 5'd0) ? '0 : regs[raddr2];
-
-    // write-first behavior (forwarding)
-    if (we && (waddr != 5'd0) && (waddr == raddr1)) rdata1 = wdata;
-    else                                             rdata1 = raw1;
-
-    if (we && (waddr != 5'd0) && (waddr == raddr2)) rdata2 = wdata;
-    else                                             rdata2 = raw2;
+    rf_o.rdata1 = (rf_i.raddr1 == 5'd0) ? '0 : regs[rf_i.raddr1];
+    rf_o.rdata2 = (rf_i.raddr2 == 5'd0) ? '0 : regs[rf_i.raddr2];
   end
 
 endmodule

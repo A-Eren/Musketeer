@@ -1,0 +1,19 @@
+# compile verilog/system verilog design source files
+sv xil_defaultlib  \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/packages/riscv_pkg.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/packages/riscv_pkg.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/ALU.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/Branch_Unit.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/Decoder.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/Imm.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/LSU.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/NextPc.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/RegisterFile.sv" \
+"../../../../Musketeer.srcs/sources_1/imports/Musketeer/rtl/Riscv_Core.sv" \
+"../../../../Musketeer.srcs/sim_1/new/First_tb.sv" \
+
+# compile glbl module
+verilog xil_defaultlib "glbl.v"
+
+# Do not sort compile order
+nosort

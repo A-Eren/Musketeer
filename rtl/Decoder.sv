@@ -1,262 +1,273 @@
-// rtl/Decoder.sv
 module Decoder (
-  input  logic [31:0] instr,
-
-  // extracted fields
-  output logic [6:0]  opcode,
-  output logic [4:0]  rd,
-  output logic [2:0]  funct3,
-  output logic [4:0]  rs1,
-  output logic [4:0]  rs2,
-  output logic [6:0]  funct7,
-
-  // immediate selection
-  output riscv_pkg::imm_sel_t  imm_sel,
-
-  // ALU control
-  output riscv_pkg::alu_op_t   alu_op,
-  output riscv_pkg::src_a_sel_t src_a_sel,
-  output riscv_pkg::src_b_sel_t src_b_sel,
-
-  // LSU control
-  output logic        is_load,
-  output logic        is_store,
-
-  // branch/jump control
-  output logic        is_branch,
-  output logic        is_jal,
-  output logic        is_jalr,
-
-  // writeback + regfile
-  output logic        reg_write,
-  output riscv_pkg::wb_sel_t wb_sel,
-
-  // optional helpers (nice for later hazards)
-  output logic        uses_rs1,
-  output logic        uses_rs2,
-
-  // illegal/unsupported instruction flag (you can trap later)
-  output logic        illegal
+  input  riscv_pkg::dec_in_t  dec_i,
+  output riscv_pkg::dec_out_t dec_o
 );
 
   import riscv_pkg::*;
 
+  logic [31:0] instr;
+
+  logic [6:0] opcode_bits;
+  opcode_t    opcode;
+
+  logic [4:0] rd;
+  logic [2:0] funct3;
+  logic [4:0] rs1;
+  logic [4:0] rs2;
+  logic [6:0] funct7;
+
+  logic shamt_legal;
+  logic sr_legal;
+
   always_comb begin
-    // -------------------------
-    // Field extraction
-    // -------------------------
-    opcode = instr[6:0];
-    rd     = instr[11:7];
-    funct3 = instr[14:12];
-    rs1    = instr[19:15];
-    rs2    = instr[24:20];
-    funct7 = instr[31:25];
+    instr       = dec_i.instr;
 
-    // -------------------------
-    // Safe defaults
-    // -------------------------
-    imm_sel   = IMM_I;
+    opcode_bits = instr[6:0];
+    opcode      = opcode_t'(opcode_bits);
 
-    alu_op    = ALU_ADD;
-    src_a_sel = SRC_A_RS1;
-    src_b_sel = SRC_B_RS2;
+    rd          = instr[11:7];
+    funct3      = instr[14:12];
+    rs1         = instr[19:15];
+    rs2         = instr[24:20];
+    funct7      = instr[31:25];
 
-    is_load   = 1'b0;
-    is_store  = 1'b0;
+    // outputs: fields
+    dec_o.opcode = opcode;
+    dec_o.rd     = rd;
+    dec_o.funct3 = funct3;
+    dec_o.rs1    = rs1;
+    dec_o.rs2    = rs2;
+    dec_o.funct7 = funct7;
 
-    is_branch = 1'b0;
-    is_jal    = 1'b0;
-    is_jalr   = 1'b0;
+    // defaults
+    dec_o.imm_sel   = IMM_I;
 
-    reg_write = 1'b0;
-    wb_sel    = WB_ALU;
+    dec_o.alu_op    = ALU_ADD;
+    dec_o.src_a_sel = SRC_A_RS1;
+    dec_o.src_b_sel = SRC_B_RS2;
 
-    uses_rs1  = 1'b0;
-    uses_rs2  = 1'b0;
+    dec_o.wb_sel    = WB_ALU;
+    dec_o.reg_write = 1'b0;
 
-    illegal   = 1'b0;
+    dec_o.br_op     = BR_NONE;
+    dec_o.lsu_op    = LSU_NONE;
 
-    // -------------------------
-    // Main opcode decode (RV32I)
-    // -------------------------
+    dec_o.is_jal    = 1'b0;
+    dec_o.is_jalr   = 1'b0;
+
+    dec_o.uses_rs1  = 1'b0;
+    dec_o.uses_rs2  = 1'b0;
+
+    dec_o.illegal   = 1'b0;
+
+    // shift legality (RV32I)
+    shamt_legal = (funct7 == 7'b0000000);      // SLLI
+    sr_legal = (funct7[6] == 1'b0) && (funct7[4:0] == 5'b00000); // allows 0000000 and 0100000
+
+
     unique case (opcode)
 
-      // R-type ALU ops
-      OPCODE_OP: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_ALU;
+      // -------------------------
+      // R-type ALU
+      // -------------------------
+      OP_OP: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_ALU;
 
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_RS2;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_RS2;
+        dec_o.uses_rs1  = 1'b1;
+        dec_o.uses_rs2  = 1'b1;
 
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b1;
-
-        // ALU op decode
         unique case (funct3)
-          3'b000: alu_op = (funct7[FUNCT7_ALT_BIT]) ? ALU_SUB : ALU_ADD;
-          3'b001: alu_op = ALU_SLL;
-          3'b010: alu_op = ALU_SLT;
-          3'b011: alu_op = ALU_SLTU;
-          3'b100: alu_op = ALU_XOR;
-          3'b101: alu_op = (funct7[FUNCT7_ALT_BIT]) ? ALU_SRA : ALU_SRL;
-          3'b110: alu_op = ALU_OR;
-          3'b111: alu_op = ALU_AND;
-          default: begin alu_op = ALU_ADD; illegal = 1'b1; end
+          3'b000: dec_o.alu_op = (instr[30]) ? ALU_SUB : ALU_ADD; // funct7[5] == instr[30]
+          3'b001: dec_o.alu_op = ALU_SLL;
+          3'b010: dec_o.alu_op = ALU_SLT;
+          3'b011: dec_o.alu_op = ALU_SLTU;
+          3'b100: dec_o.alu_op = ALU_XOR;
+          3'b101: dec_o.alu_op = (instr[30]) ? ALU_SRA : ALU_SRL;
+          3'b110: dec_o.alu_op = ALU_OR;
+          3'b111: dec_o.alu_op = ALU_AND;
+          default: dec_o.illegal = 1'b1;
         endcase
       end
 
-      // I-type ALU ops
-      OPCODE_OP_IMM: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_ALU;
+      // -------------------------
+      // I-type ALU immediates
+      // -------------------------
+      OP_OP_IMM: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_ALU;
 
-        imm_sel   = IMM_I;
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_IMM;
-
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b0;
+        dec_o.imm_sel   = IMM_I;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.uses_rs1  = 1'b1;
 
         unique case (funct3)
-          3'b000: alu_op = ALU_ADD;   // ADDI
-          3'b010: alu_op = ALU_SLT;   // SLTI
-          3'b011: alu_op = ALU_SLTU;  // SLTIU
-          3'b100: alu_op = ALU_XOR;   // XORI
-          3'b110: alu_op = ALU_OR;    // ORI
-          3'b111: alu_op = ALU_AND;   // ANDI
-          3'b001: alu_op = ALU_SLL;   // SLLI
-          3'b101: alu_op = (funct7[FUNCT7_ALT_BIT]) ? ALU_SRA : ALU_SRL; // SRAI/SRLI
-          default: begin alu_op = ALU_ADD; illegal = 1'b1; end
+          3'b000: dec_o.alu_op = ALU_ADD;   // ADDI
+          3'b010: dec_o.alu_op = ALU_SLT;   // SLTI
+          3'b011: dec_o.alu_op = ALU_SLTU;  // SLTIU
+          3'b100: dec_o.alu_op = ALU_XOR;   // XORI
+          3'b110: dec_o.alu_op = ALU_OR;    // ORI
+          3'b111: dec_o.alu_op = ALU_AND;   // ANDI
+
+          3'b001: begin                    // SLLI
+            dec_o.alu_op = ALU_SLL;
+            if (!shamt_legal) dec_o.illegal = 1'b1;
+          end
+
+          3'b101: begin                    // SRLI/SRAI
+            dec_o.alu_op = (instr[30]) ? ALU_SRA : ALU_SRL;
+            if (!sr_legal) dec_o.illegal = 1'b1;
+          end
+
+          default: dec_o.illegal = 1'b1;
         endcase
       end
 
-      // Loads
-      OPCODE_LOAD: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_MEM;
+      // -------------------------
+      // Loads -> lsu_op
+      // -------------------------
+      OP_LOAD: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_MEM;
 
-        is_load   = 1'b1;
+        dec_o.imm_sel   = IMM_I;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_ADD;
 
-        imm_sel   = IMM_I;
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_ADD; // address = rs1 + imm
+        dec_o.uses_rs1  = 1'b1;
 
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b0;
-
-        // (optional) you can mark illegal on unknown funct3
-        if (!(funct3 inside {F3_LB, F3_LH, F3_LW, F3_LBU, F3_LHU})) illegal = 1'b1;
+        unique case (funct3)
+          3'b000: dec_o.lsu_op = LSU_LB;
+          3'b001: dec_o.lsu_op = LSU_LH;
+          3'b010: dec_o.lsu_op = LSU_LW;
+          3'b100: dec_o.lsu_op = LSU_LBU;
+          3'b101: dec_o.lsu_op = LSU_LHU;
+          default: begin
+            dec_o.lsu_op  = LSU_NONE;
+            dec_o.illegal = 1'b1;
+          end
+        endcase
       end
 
-      // Stores
-      OPCODE_STORE: begin
-        reg_write = 1'b0;
+      // -------------------------
+      // Stores -> lsu_op
+      // -------------------------
+      OP_STORE: begin
+        dec_o.reg_write = 1'b0;
 
-        is_store  = 1'b1;
+        dec_o.imm_sel   = IMM_S;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_ADD;
 
-        imm_sel   = IMM_S;
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_ADD; // address = rs1 + imm
+        dec_o.uses_rs1  = 1'b1;
+        dec_o.uses_rs2  = 1'b1;
 
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b1; // store data comes from rs2
-
-        if (!(funct3 inside {F3_SB, F3_SH, F3_SW})) illegal = 1'b1;
+        unique case (funct3)
+          3'b000: dec_o.lsu_op = LSU_SB;
+          3'b001: dec_o.lsu_op = LSU_SH;
+          3'b010: dec_o.lsu_op = LSU_SW;
+          default: begin
+            dec_o.lsu_op  = LSU_NONE;
+            dec_o.illegal = 1'b1;
+          end
+        endcase
       end
 
-      // Branches
-      OPCODE_BRANCH: begin
-        reg_write = 1'b0;
+      // -------------------------
+      // Branch -> br_op
+      // -------------------------
+      OP_BRANCH: begin
+        dec_o.reg_write = 1'b0;
 
-        is_branch = 1'b1;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_RS2;
+        dec_o.alu_op    = ALU_SUB;
 
-        imm_sel   = IMM_B;
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_RS2;
-        alu_op    = ALU_SUB; // common: use zero flag for BEQ/BNE
+        dec_o.imm_sel   = IMM_B;
 
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b1;
+        dec_o.uses_rs1  = 1'b1;
+        dec_o.uses_rs2  = 1'b1;
 
-        // RV32I branch funct3 are 000/001/100/101/110/111
-        if (!(funct3 inside {3'b000,3'b001,3'b100,3'b101,3'b110,3'b111})) illegal = 1'b1;
+        unique case (funct3)
+          3'b000: dec_o.br_op = BR_BEQ;
+          3'b001: dec_o.br_op = BR_BNE;
+          3'b100: dec_o.br_op = BR_BLT;
+          3'b101: dec_o.br_op = BR_BGE;
+          3'b110: dec_o.br_op = BR_BLTU;
+          3'b111: dec_o.br_op = BR_BGEU;
+          default: begin
+            dec_o.br_op   = BR_NONE;
+            dec_o.illegal = 1'b1;
+          end
+        endcase
       end
 
+      // -------------------------
       // JAL
-      OPCODE_JAL: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_PC4;
+      // -------------------------
+      OP_JAL: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_PC4;
 
-        is_jal    = 1'b1;
+        dec_o.is_jal    = 1'b1;
 
-        imm_sel   = IMM_J;
-
-        // target calc often uses PC + imm
-        src_a_sel = SRC_A_PC;
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_ADD;
-
-        uses_rs1  = 1'b0;
-        uses_rs2  = 1'b0;
+        dec_o.imm_sel   = IMM_J;
+        dec_o.src_a_sel = SRC_A_PC;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_ADD;
       end
 
+      // -------------------------
       // JALR
-      OPCODE_JALR: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_PC4;
+      // -------------------------
+      OP_JALR: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_PC4;
 
-        is_jalr   = 1'b1;
+        dec_o.is_jalr   = 1'b1;
 
-        imm_sel   = IMM_I;
+        dec_o.imm_sel   = IMM_I;
+        dec_o.src_a_sel = SRC_A_RS1;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_ADD;
 
-        // target = rs1 + imm, then clear bit0 outside (per spec)
-        src_a_sel = SRC_A_RS1;
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_ADD;
+        dec_o.uses_rs1  = 1'b1;
 
-        uses_rs1  = 1'b1;
-        uses_rs2  = 1'b0;
-
-        // funct3 must be 000 for JALR in RV32I
-        if (funct3 != 3'b000) illegal = 1'b1;
+        if (funct3 != 3'b000) dec_o.illegal = 1'b1;
       end
 
-      // AUIPC: rd = PC + (imm_u)
-      OPCODE_AUIPC: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_ALU;
+      // -------------------------
+      // AUIPC
+      // -------------------------
+      OP_AUIPC: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_ALU;
 
-        imm_sel   = IMM_U;
-
-        src_a_sel = SRC_A_PC;
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_ADD;
-
-        uses_rs1  = 1'b0;
-        uses_rs2  = 1'b0;
+        dec_o.imm_sel   = IMM_U;
+        dec_o.src_a_sel = SRC_A_PC;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_ADD;
       end
 
-      // LUI: rd = imm_u
-      OPCODE_LUI: begin
-        reg_write = 1'b1;
-        wb_sel    = WB_ALU;
+      // -------------------------
+      // LUI
+      // -------------------------
+      OP_LUI: begin
+        dec_o.reg_write = 1'b1;
+        dec_o.wb_sel    = WB_ALU;
 
-        imm_sel   = IMM_U;
-
-        // easiest: ALU copies B (imm)
-        src_a_sel = SRC_A_RS1; // don't care
-        src_b_sel = SRC_B_IMM;
-        alu_op    = ALU_COPY_B;
-
-        uses_rs1  = 1'b0;
-        uses_rs2  = 1'b0;
+        dec_o.imm_sel   = IMM_U;
+        dec_o.src_b_sel = SRC_B_IMM;
+        dec_o.alu_op    = ALU_COPY_B;
       end
 
       default: begin
-        illegal = 1'b1; // unsupported opcode
+        dec_o.illegal = 1'b1;
       end
 
     endcase
